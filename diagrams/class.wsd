@@ -1,0 +1,134 @@
+@startuml diagram
+
+skinparam packageStyle rectangle
+skinparam classAttributeIconVisibility false
+
+package "dataset" {
+  class ClientItem {
+    + row_id : i32
+    + age : i8
+    + gender : i8
+    + family_members: i8
+    + financial_education: f32
+    + risk_propensity: f32
+    + income: f32
+    + wealth: f32
+    + income_investment: i8
+    + accumulation_investment: i8
+    + client_id: i8
+  }
+
+  class ClientDataset {
+    - dataset: InMemDataset<ClientItem>
+    --
+    + new(file_path: &str) : Result<Self, Error>
+    + from_InMemD(...) : Self
+    + clone() : Self
+    + get(index: usize) : Option<ClientItem>
+    + len() : usize
+  }
+
+  class ClientBatcher<B: Backend> {
+    - device: B::Device
+    --
+    + new(device: B::Device) : Self
+    + batch(items: Vec<ClientItem>) : ClientBatch<B>
+  }
+
+  class ClientBatch<B: Backend> {
+    + data: Tensor<B, 2>
+    + target: Tensor<B, 1>
+  }
+
+  ' Helper functions
+  class "get_train_test(...)" as GetTrainTest
+  class "preprocessing(...)" as Preprocessing
+}
+
+package "model" {
+  class ModelConfig {
+    + init<B: Backend>(device: &B::Device) : Model<B>
+  }
+
+  class Model<B: Backend> {
+    - layer1: Linear<B>
+    - layer2: Linear<B>
+    - activation: Relu
+    --
+    + forward(data: Tensor<B,2>) : Tensor<B,2>
+    + forward_step(item: ClientBatch<B>) : RegressionOutput<B>
+    + clone() : Self
+    + load_record(record: ModelRecord<B>) : Self
+    + into_record() : ModelRecord<B>
+  }
+
+  class ModelRecord<B: Backend> {
+    + layer1: LinearRecord<B>
+    + layer2: LinearRecord<B>
+    + activation: ConstantRecord (or similar)
+    --
+    ' Holds trainable parameters
+  }
+}
+
+package "training" {
+  class ClientTrainingConfig {
+    + num_epochs: usize
+    + batch_size: usize
+    + num_workers: usize
+    + seed: u64
+    + lr: f64
+    + train_set: ClientDataset
+    + test_set: ClientDataset
+    + model_path: String
+    --
+    + new(train, test, model_path) : Self
+  }
+
+  class local_train<B: AutodiffBackend> {
+    + local_train(device: B::Device, 
+                  config: ClientTrainingConfig) 
+        : Result<Vec<u8>, RecorderError>
+  }
+}
+
+package "main.rs" <<filesystem>> {
+  class Main {
+    ' Represents main() function
+    + main() : ()
+  }
+}
+
+
+' ----------------- Relationships ------------------
+Main --> "get_train_test" : calls
+Main --> "preprocessing" : calls
+Main --> ClientDataset : uses
+Main --> local_train : orchestrates
+local_train --> ClientTrainingConfig : receives config
+local_train --> ModelRecord : loads from file
+local_train --> Model : trains/returns updated record
+Model --> ModelRecord : load/save parameters
+Model --> ClientBatch : forward_step
+ClientBatcher --> ClientBatch : creates
+ClientDataset --> ClientItem : composition
+@enduml
+
+@startuml
+left to right direction
+
+actor "Data Scientist" as DS
+
+rectangle "Federated Training System" {
+  usecase "Load CSV Data" as UC1
+  usecase "Train Federated Model" as UC2
+  usecase "Run Inference" as UC3
+  usecase "Export Predictions" as UC4
+}
+
+DS -- UC1
+DS -- UC2
+DS -- UC3
+DS -- UC4
+
+@enduml

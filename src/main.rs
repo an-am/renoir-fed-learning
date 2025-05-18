@@ -24,56 +24,6 @@ type MyAutoDiff = Autodiff<MyBackend>;
 const N_MODELS: i32 = 10;
 const N_ITERATIONS: i32 = 10;
 
-/* 
-pub fn avg_record(records: Vec<ModelRecord<Autodiff<NdArray>>>) -> ModelRecord<Autodiff<NdArray>> {
-    let r = &records[0];
-    let mut weight_layer1: Tensor<Autodiff<NdArray>, 2> = Tensor::zeros_like(&r.layer1.weight);
-    let mut weight_layer2: Tensor<Autodiff<NdArray>, 2> = Tensor::zeros_like(&r.layer2.weight);
-
-    let mut bias_layer1: Tensor<Autodiff<NdArray>, 1> = Tensor::zeros_like(&r.layer1.bias.clone().unwrap().val());
-    let mut bias_layer2: Tensor<Autodiff<NdArray>, 1> = Tensor::zeros_like(&r.layer2.bias.clone().unwrap().val());
-    
-    let n = records.len() as i32;
-    
-    for record in records {
-        // Weight
-        let x = record.layer1.weight.val();
-        weight_layer1 = weight_layer1.add(x);
-
-        let x = record.layer2.weight.val();
-        weight_layer2 = weight_layer2.add(x);
-
-        // Bias
-        let x = record.layer1.bias.unwrap().val();
-        bias_layer1 = bias_layer1.add(x);
-
-        let x = record.layer2.bias.unwrap().val();
-        bias_layer2 = bias_layer2.add(x);
-    }
-
-    let global_weight_layer1: Param<Tensor<Autodiff<NdArray>, 2>> = Param::from_tensor(weight_layer1.detach().div_scalar(n));
-    let global_weight_layer2: Param<Tensor<Autodiff<NdArray>, 2>> = Param::from_tensor(weight_layer2.detach().div_scalar(n));
-
-    let global_bias_layer1: Option<Param<Tensor<Autodiff<NdArray>, 1>>> = Some(Param::from_tensor(bias_layer1.detach().div_scalar(n)));
-    let global_bias_layer2: Option<Param<Tensor<Autodiff<NdArray>, 1>>> = Some(Param::from_tensor(bias_layer2.detach().div_scalar(n)));
-
-    let layer_1 = LinearRecord {
-        weight: global_weight_layer1,
-        bias: global_bias_layer1,
-    };
-
-    let layer_2 = LinearRecord {
-        weight: global_weight_layer2,
-        bias: global_bias_layer2,
-    };
-
-    ModelRecord::<Autodiff<NdArray>> {
-        layer1: layer_1,
-        layer2: layer_2,
-        activation: ConstantRecord,
-    }
-}
-*/
 
 fn main() {
     let (conf, _args) = RuntimeConfig::from_args();
@@ -84,7 +34,7 @@ fn main() {
     let device = NdArrayDevice::default();
 
     // Get train and test data
-    let file_path: &str= "/Users/antonelloamore/VS code/renoir-fed-training/Needs.csv";
+    let file_path: &str= "/Users/antonelloamore/VScode/renoir-fed-training/Needs.csv";
 
     let dataset = ClientDataset::new(file_path).unwrap();
 
@@ -94,28 +44,28 @@ fn main() {
     let train_partition = PartialDataset::split(train_dataset, 10);
     let test_partition = PartialDataset::split(test_dataset, 10);
 
-    let mut vec1: Vec<ClientDataset> = Vec::new();
-    let mut vec2: Vec<ClientDataset> = Vec::new();
+    let mut train: Vec<ClientDataset> = Vec::new();
+    let mut test: Vec<ClientDataset> = Vec::new();
     for i in 0..10 as usize { 
-        vec1.push(ClientDataset::from_InMemD(InMemDataset::from_dataset(&train_partition[i])));
-        vec2.push(ClientDataset::from_InMemD(InMemDataset::from_dataset(&test_partition[i])));
+        train.push(ClientDataset::from_InMemD(InMemDataset::from_dataset(&train_partition[i])));
+        test.push(ClientDataset::from_InMemD(InMemDataset::from_dataset(&test_partition[i])));
     }
     
     // Create the model
     let mut model: Model<MyAutoDiff> = model::ModelConfig::new().init(&device);
 
-    let local_model_dir = "/Users/antonelloamore/VS code/renoir-fed-training/local-models/";
+    let local_model_dir = "/Users/antonelloamore/VScode/renoir-fed-training/local-models/";
 
     for i in 0..10 {
         let local_model_path = format!("{}{}", local_model_dir, i);
 
         let recorder = BinFileRecorder::<FullPrecisionSettings>::new();
-        model.clone().save_file(local_model_path, &recorder);
+        let _ = model.clone().save_file(local_model_path, &recorder);
     }
 
     // Train and valid sets
-    let vec1: Arc<Vec<ClientDataset>> = Arc::new(vec1);
-    let vec2: Arc<Vec<ClientDataset>> = Arc::new(vec2);
+    let train: Arc<Vec<ClientDataset>> = Arc::new(train);
+    let test: Arc<Vec<ClientDataset>> = Arc::new(test);
 
     for i in 0..N_ITERATIONS as usize {
         let ctx = StreamContext::new(conf.clone());
@@ -123,13 +73,13 @@ fn main() {
         let s = ctx
             .stream_par_iter(0..N_MODELS)
             .rich_map({
-                let vec1 = Arc::clone(&vec1); 
-                let vec2 = Arc::clone(&vec2);
+                let train = Arc::clone(&train); 
+                let test = Arc::clone(&test);
                 move |i| {
                     let local_model_path = format!("{}{}", local_model_dir, i);
                     let config = ClientTrainingConfig::new(
-                        vec1[i as usize].clone(),
-                        vec2[i as usize].clone(),
+                        train[i as usize].clone(),
+                        test[i as usize].clone(),
                         format!("{}", local_model_path)
                     );
 
@@ -221,7 +171,7 @@ fn main() {
     }
 
    // TEST: inference
-    let source = CsvSource::<ClientItem>::new("/Users/antonelloamore/VS code/renoir-prediction/Needs.csv");
+    let source = CsvSource::<ClientItem>::new("/Users/antonelloamore/VScode/renoir-fed-training/Needs.csv");
     let env = StreamContext::new(conf);
     let s = env
         .stream(source)
@@ -233,14 +183,14 @@ fn main() {
 
     env.execute_blocking();
 
-    let mut file = File::create("/Users/antonelloamore/VS code/renoir-fed-training/local-models/file.txt").unwrap();
+    let mut file = File::create("/Users/antonelloamore/VScode/renoir-fed-training/local-models/file.txt").unwrap();
     let a = s.get().unwrap();
-    
+
     for row in a {
         let line = row.iter()
             .map(|item| item.to_string())
             .collect::<Vec<String>>()
             .join(",");
-        writeln!(file, "{}", line);
+        writeln!(file, "{}", &line).unwrap();
     }
 }

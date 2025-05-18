@@ -1,0 +1,18 @@
+@startuml 
+left to right direction
+
+actor "Data Scientist" as DS
+
+rectangle "Federated Training System" {
+  usecase "Load CSV Data" as UC1
+  usecase "Train Federated Model" as UC2
+  usecase "Run Inference" as UC3
+  usecase "Export Predictions" as UC4
+}
+
+DS -- UC1
+DS -- UC2
+DS -- UC3
+DS -- UC4
+
+@enduml

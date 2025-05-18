@@ -1,0 +1,55 @@
+@startuml
+
+skinparam sequence {
+  ArrowThickness 2
+  LifeLineBorderColor black
+  LifeLineBackgroundColor #EEE
+  ParticipantBackgroundColor #EEE
+  ParticipantFontName Arial
+  BoxFontName Arial
+}
+
+actor "User/CLI" as User
+
+participant "main()" as Main
+participant "Renoir" as Renoir
+
+== Initialization ==
+User -> Main: Execute
+Main -> Renoir: from_args()
+Renoir --> Main: returns conf
+
+Main -> Renoir: spawn_remote_workers()
+
+Main -> Main: Load dataset, get_train_test(...)
+Main -> Main: Split dataset (PartialDataset)
+Main -> Main: Create or load initial Model
+
+== FedAvg Training Loop ==
+loop 0..N_ITERATIONS
+  Main -> Renoir: new(conf)
+  note right
+    Creates a StreamContext
+  end note
+
+  Main -> Renoir: stream_par_iter(0..N_MODELS)
+  par (On each client)
+    Renoir -> Renoir: Load local model from disk
+    Renoir -> Renoir: local_train(device, config)
+    note right
+      Each node loads & trains its local model
+    end note
+
+  end
+
+  Renoir -> Renoir: Aggregate local models
+  note right
+    fold + map
+  end note
+  Main -> Renoir: execute_blocking()
+  loop 0..N_MODELS
+    Main -> Main: Copy global model's record into disk
+  end
+end
+
+@enduml

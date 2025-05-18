@@ -43,8 +43,8 @@ impl<B: Backend> ClientBatcher<B> {
     }
 }
 
-impl<B: Backend> Batcher<ClientItem, ClientBatch<B>> for ClientBatcher<B> {
-    fn batch(&self, items: Vec<ClientItem>) -> ClientBatch<B> {
+impl<B: Backend> Batcher<B, ClientItem, ClientBatch<B>> for ClientBatcher<B> {
+    fn batch(&self, items: Vec<ClientItem>, device: &B::Device) -> ClientBatch<B> {
       
         let data = items.clone()
             .iter()

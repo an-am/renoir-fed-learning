@@ -1,0 +1,68 @@
+@startuml
+
+skinparam componentStyle rectangle
+
+rectangle "main.rs" as Main
+note bottom of Main
+  Orchestrates federated training
+  and aggregations via Renoir
+end note
+
+rectangle "dataset" as Dataset
+note bottom of Dataset
+  ClientDataset, 
+  ClientBatcher,
+  get_train_test(...),
+  etc.
+end note
+
+rectangle "training" as Training
+note bottom of Training
+  local_train(...),
+  config for training
+end note
+
+rectangle "model" as ModelMod
+note bottom of ModelMod
+  Model, 
+  ModelRecord,
+  forward(...)
+end note
+
+component "Burn" as BurnLib
+note bottom of BurnLib
+  Neural network layers,
+  modules & weights mgmt
+end note
+
+rectangle "Renoir" as Renoir
+note bottom of Renoir
+  stream_par_iter,
+  etc.
+end note
+
+rectangle "BinFileRecorder / BinBytesRecorder" as Recorders
+note bottom of Recorders
+  Provided by Burn
+  - BinFileRecorder: saves to file system
+  - BinBytesRecorder: loads/stores in memory
+end note
+
+node "File System" as FS
+note bottom of FS
+  local-models
+  (stores .bin files)
+end note
+
+' Relationships
+Main --> Renoir : Implements FedAvg algorithm
+Main --> Dataset : Splits train/test sets
+Main --> Training : Calls local_train
+Main --> ModelMod : Holds global model,\n aggregates local models
+Training --> ModelMod : Trains local models
+Training --> Dataset : Data preprocessing
+ModelMod --> BurnLib : Uses layers & param mgmt
+Main --> Recorders : Loads/saves ModelRecord
+Recorders --> FS : persistent .bin files
+
+@enduml

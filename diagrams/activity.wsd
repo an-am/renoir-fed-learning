@@ -1,0 +1,43 @@
+@startuml
+
+skinparam handwritten false
+skinparam activity {
+  BackgroundColor #EEE
+  DiamondBackgroundColor #EEE
+  RoundCorner 20
+  ArrowColor #333
+  FontName Arial
+}
+
+start
+:Read config & parse arguments\n(Run `RuntimeConfig::from_args()`);
+:Spawn remote Noir workers\n(conf.spawn_remote_workers());
+:Create device (NdArrayDevice);
+:Load CSV data\n(get_train_test(...));
+:Split dataset into train/test\n(PartialDataset::split(...));
+
+while (i < N_ITERATIONS) is (More iterations?)
+  :Create Renoir StreamContext\n(ctx = StreamContext::new(conf));
+
+  note right
+    Parallel training for each client using
+    ctx.stream_par_iter(0..N_MODELS)
+  end note
+
+  fork
+    :For each client in 0..N_MODELS (in parallel);
+    :Load local model from disk;
+    :Train locally\n(local_train);
+    :Return updated ModelRecord;
+  end fork
+
+  :Aggregate updated ModelRecords\n(average parameters);
+  :Update global model in memory;
+  :Save global model to disk\n(overwrite local models);
+endwhile (No)
+
+:Run final inference\n(model.forward(...) on new data);
+:Write predictions to file.txt;
+
+stop
+@enduml
