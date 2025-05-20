@@ -43,18 +43,22 @@ impl<B: Backend> ClientBatcher<B> {
     }
 }
 
-impl<B: Backend> Batcher<B, ClientItem, ClientBatch<B>> for ClientBatcher<B> {
-    fn batch(&self, items: Vec<ClientItem>, device: &B::Device) -> ClientBatch<B> {
+impl<B: Backend> Batcher<B, Vec<f32>, ClientBatch<B>> for ClientBatcher<B> {
+    fn batch(&self, items: Vec<Vec<f32>>, device: &B::Device) -> ClientBatch<B> {
       
         let data = items.clone()
             .iter()
-            .map(|v| preprocessing(*v))
-            .map(move |v| Tensor::<B, 2>::from_data(TensorData::new(v.clone(), [1, v.len()]), &self.device))
+            .map(move |v| {
+                let mut v = v.clone();
+                v.pop();
+                Tensor::<B, 2>::from_data(TensorData::new(v.clone(), [1, v.len()]), &self.device)})
             .collect();
 
         let target = items.clone()
             .iter()
-            .map(|item| Tensor::<B, 1>::from_floats([item.risk_propensity.clone()], &self.device))
+            .map(|item| {
+                let risk_propensity = item.clone().pop().unwrap();
+                Tensor::<B, 1>::from_floats([risk_propensity], &self.device)})
             .collect();
 
         let data = Tensor::cat(data, 0);
@@ -93,6 +97,14 @@ impl ClientDataset {
     pub fn from_InMemD(dataset: InMemDataset<ClientItem>) -> Self {
         Self { dataset: dataset }
     }
+
+    pub fn dataset(&self) -> InMemDataset<ClientItem> {
+        let mut v = Vec::new();
+        for i in 0..self.dataset.len() {
+            v.push(self.dataset.get(i).unwrap());
+        }
+        InMemDataset::<ClientItem>::new(v)
+    }
 }
 
 
@@ -118,24 +130,36 @@ pub fn get_train_test(dataset: ClientDataset, split: &str) -> ClientDataset {
     }
 }
 
-pub fn preprocessing(client: ClientItem) -> Vec<f32> {
+pub fn preprocessing(dataset: ClientDataset) -> InMemDataset<Vec<f32>> {
+    // Preprocess the client data
+    // Convert the client data into a vector of f32
 
-    let client_vec = vec![
-        client.age as f32,
-        client.gender as f32,
-        client.family_members as f32,
-        client.financial_education,
-        (client.income.powf(FITTED_LAMBDA_INCOME) - 1.0) / FITTED_LAMBDA_INCOME,
-        (client.wealth.powf(FITTED_LAMBDA_WEALTH) - 1.0) / FITTED_LAMBDA_WEALTH,
-        client.income_investment as f32,
-        client.accumulation_investment as f32,
-        client.financial_education * client.wealth.ln(),
-    ];
-    
-    // Scale the data using means and scales
-    client_vec
-        .iter()
-        .zip(SCALER_MEANS.iter().zip(SCALER_SCALES.iter()))
-        .map(|(&value, (&mean, &scale))| (value - mean) / scale)
-        .collect()
+    let mut client_vec: Vec<Vec<f32>> = Vec::new();
+
+    for client in dataset.iter() {
+        
+        let v = vec![
+            client.age as f32,
+            client.gender as f32,
+            client.family_members as f32,
+            client.financial_education,
+            (client.income.powf(FITTED_LAMBDA_INCOME) - 1.0) / FITTED_LAMBDA_INCOME,
+            (client.wealth.powf(FITTED_LAMBDA_WEALTH) - 1.0) / FITTED_LAMBDA_WEALTH,
+            client.income_investment as f32,
+            client.accumulation_investment as f32,
+            client.financial_education * client.wealth.ln(),
+        ];
+        // Scale the data using means and scales
+        let mut a: Vec<f32> = v
+            .iter()
+            .zip(SCALER_MEANS.iter().zip(SCALER_SCALES.iter()))
+            .map(|(&value, (&mean, &scale))| (value - mean) / scale)
+            .collect();
+
+        a.push(client.risk_propensity);
+
+        client_vec.push(a);
+    }
+
+    InMemDataset::new(client_vec)
 }

@@ -1,16 +1,17 @@
-use std::{fs::File, io::Write, sync::Arc};
+use std::{io::Error, sync::Arc};
+
 use model::{Model, ModelRecord};
 use renoir::prelude::*;
-use dataset::{get_train_test, preprocessing, ClientDataset, ClientItem};
+use dataset::{get_train_test, preprocessing, ClientBatcher, ClientDataset};
 use burn::{
             backend::Autodiff, 
-            data::dataset::{transform::PartialDataset, InMemDataset}, 
+            data::{self, dataloader::{DataLoader, DataLoaderBuilder}, dataset::{transform::PartialDataset, Dataset, InMemDataset}}, 
             module::{ConstantRecord, Module, Param}, 
             nn::LinearRecord, 
-            record::{BinBytesRecorder, BinFileRecorder, FullPrecisionSettings, Recorder}, 
-            tensor::{Tensor, TensorData}
+            record::{BinBytesRecorder, FullPrecisionSettings, Recorder}, train
         };
 
+use serde::{ser::SerializeTuple, Serialize};
 use training::{local_train, ClientTrainingConfig};
 use burn_ndarray::{NdArray, NdArrayDevice};
 
@@ -23,7 +24,9 @@ type MyAutoDiff = Autodiff<MyBackend>;
 
 const N_MODELS: i32 = 10;
 const N_ITERATIONS: i32 = 10;
-
+const BATCH_SIZE: usize = 64;
+const N_WORKERS: usize = 1;
+const SEED: u64 = 42;
 
 fn main() {
     let (conf, _args) = RuntimeConfig::from_args();
@@ -54,41 +57,75 @@ fn main() {
     // Create the model
     let mut model: Model<MyAutoDiff> = model::ModelConfig::new().init(&device);
 
-    let local_model_dir = "/Users/antonelloamore/VScode/renoir-fed-training/local-models/";
-
-    for i in 0..10 {
-        let local_model_path = format!("{}{}", local_model_dir, i);
-
-        let recorder = BinFileRecorder::<FullPrecisionSettings>::new();
-        let _ = model.clone().save_file(local_model_path, &recorder);
+    let mut record_vec = Vec::new();
+    for _ in 0..10 {
+        let recorder = BinBytesRecorder::<FullPrecisionSettings>::new();
+        let bytes = recorder.record(model.clone().into_record(), ()).unwrap();
+        record_vec.push(bytes);
     }
 
     // Train and valid sets
     let train: Arc<Vec<ClientDataset>> = Arc::new(train);
     let test: Arc<Vec<ClientDataset>> = Arc::new(test);
 
-    for i in 0..N_ITERATIONS as usize {
+    // Data preparation
+    let ctx = StreamContext::new(conf.clone());
+
+
+    let s = ctx.stream_par_iter(0..N_MODELS)
+        .map(move |i| {
+            let binding = train.clone();
+            let train = binding.get(i as usize).unwrap();
+            let binding = test.clone();
+            let test = binding.get(i as usize).unwrap();
+
+            let x: InMemDataset<Vec<f32>>= preprocessing(train.clone());
+            let y: InMemDataset<Vec<f32>> = preprocessing(test.clone());
+
+            let mut x_vec: Vec<Vec<f32>> = Vec::new();
+            let mut y_vec: Vec<Vec<f32>> = Vec::new();
+            
+            for i in x.iter() {
+                x_vec.push(i.clone());
+            }
+            for i in y.iter() {
+                y_vec.push(i.clone());
+            }
+            (x_vec, y_vec)
+        }).collect_vec_all();
+
+    ctx.execute_blocking();
+
+    let data= s.get().unwrap();
+
+    for iteration in 0..N_ITERATIONS as usize {
+
         let ctx = StreamContext::new(conf.clone());
 
-        let s = ctx
-            .stream_par_iter(0..N_MODELS)
-            .rich_map({
-                let train = Arc::clone(&train); 
-                let test = Arc::clone(&test);
-                move |i| {
-                    let local_model_path = format!("{}{}", local_model_dir, i);
-                    let config = ClientTrainingConfig::new(
-                        train[i as usize].clone(),
-                        test[i as usize].clone(),
-                        format!("{}", local_model_path)
-                    );
+        let local_record_vec: Vec<Vec<u8>> = record_vec.clone();
 
+        let s = ctx
+            .stream_par_iter( 0..N_MODELS)
+            .rich_map({
+                let data = Arc::new(data.clone());
+                let local_record_vec = local_record_vec.clone();
+                move|i| {
+                    let binding = data.clone();
+                    let data = binding.get(i as usize).unwrap();
+                    let train = InMemDataset::new(data.clone().0);
+                    let test = InMemDataset::new(data.clone().1);
+                    let config = ClientTrainingConfig::new(
+                        train,
+                        test,
+                        local_record_vec[i as usize].clone()
+                    );
+                    println!("Training model {:?}", i);
                     local_train::<MyAutoDiff>(device.clone(), config).unwrap()
                 } 
             })
             .fold(None, |acc: &mut Option<ModelRecord<Autodiff<NdArray>>>, record: Vec<u8>| {
-                    let recorder = BinBytesRecorder::<FullPrecisionSettings>::new();
-                    let r: ModelRecord<Autodiff<NdArray>> = recorder.load::<ModelRecord<MyAutoDiff>>(record, &(NdArrayDevice::default())).unwrap();
+                    let recorder: BinBytesRecorder<FullPrecisionSettings> = BinBytesRecorder::<FullPrecisionSettings>::new();
+                    let r: ModelRecord<Autodiff<NdArray>> = recorder.load(record, &(NdArrayDevice::default())).unwrap();
                     
                     if acc.is_none() {
                         acc.replace(r);
@@ -124,8 +161,8 @@ fn main() {
                         acc.replace(record); 
                     }
             })
-            .map(|a| {
-                let ModelRecord { layer1, layer2, activation } = a.unwrap();
+            .map(|record| {
+                let ModelRecord { layer1, layer2, activation: _ } = record.unwrap();
                 let LinearRecord { weight: weight_l1, bias: bias_l1 } = layer1;
                 let LinearRecord { weight: weight_l2, bias: bias_l2 } = layer2;
 
@@ -154,43 +191,27 @@ fn main() {
             .collect_vec();
             
         ctx.execute_blocking();
-
-        let s = s.get().unwrap().pop().unwrap();    
         
-        let recorder = BinBytesRecorder::<FullPrecisionSettings>::new();
-        let global_record = recorder.load::<ModelRecord<MyAutoDiff>>(s, &device).unwrap();
-        model = model.load_record(global_record);
+        let s = s.get();
 
-        for i in 0..N_MODELS {
-            let local_model_path = format!("{}{}", local_model_dir, i);
-            let recorder = BinFileRecorder::<FullPrecisionSettings>::new();
+        if !s.is_none() {
+            println!("Loading model {:?}", iteration);
+            let s = s.unwrap().pop().unwrap();
+            let recorder = BinBytesRecorder::<FullPrecisionSettings>::new();
+            let global_record = recorder.load::<ModelRecord<MyAutoDiff>>(s, &device).unwrap();
+            model = model.load_record(global_record);
+            record_vec.clear();
             
-            model.clone().save_file(local_model_path, &recorder).expect(&format!("File {:?} not saved", format!("local_model{}", i)));
+            let recorder = BinBytesRecorder::<FullPrecisionSettings>::new();
+            let bytes = recorder.record(model.clone().into_record(), ()).unwrap();
+            
+            for _ in 0..N_MODELS {
+                record_vec.push(bytes.clone());
+            }
         }
-        println!("Iteration {:?} completed!", i);
+
+        println!("Iteration {:?} completed!", iteration);
     }
-
-   // TEST: inference
-    let source = CsvSource::<ClientItem>::new("/Users/antonelloamore/VScode/renoir-fed-training/Needs.csv");
-    let env = StreamContext::new(conf);
-    let s = env
-        .stream(source)
-        .map(|v| preprocessing(v))
-        .map(move |v| Tensor::<MyAutoDiff, 2>::from_data(TensorData::new(v.clone(), [1, v.len()]), &device))
-        .map(move |v| model.forward(v))
-        .map(|v| v.to_data().to_vec::<f32>().unwrap())
-        .collect_vec(); // for_each println!("Model output: {:?}", v.first().unwrap())); 
-
-    env.execute_blocking();
-
-    let mut file = File::create("/Users/antonelloamore/VScode/renoir-fed-training/local-models/file.txt").unwrap();
-    let a = s.get().unwrap();
-
-    for row in a {
-        let line = row.iter()
-            .map(|item| item.to_string())
-            .collect::<Vec<String>>()
-            .join(",");
-        writeln!(file, "{}", &line).unwrap();
-    }
+    println!("Training completed!");
+    return;
 }

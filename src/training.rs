@@ -1,9 +1,9 @@
 use burn::{
-            data::dataloader::DataLoaderBuilder, 
+            data::{dataloader::DataLoaderBuilder, dataset::InMemDataset}, 
             module::AutodiffModule, 
             optim::{AdamConfig, GradientsParams, Optimizer}, 
             prelude::*, 
-            record::{BinBytesRecorder, BinFileRecorder, FullPrecisionSettings, Recorder}, 
+            record::{BinBytesRecorder, FullPrecisionSettings, Recorder}, 
             tensor::backend::AutodiffBackend, 
 };
 
@@ -20,13 +20,13 @@ pub struct ClientTrainingConfig {
     pub num_workers: usize,
     pub seed: u64,
     pub lr: f64,
-    pub train_set: ClientDataset,
-    pub test_set: ClientDataset,
-    pub model_path: String
+    pub train_set: InMemDataset<Vec<f32>>,
+    pub test_set: InMemDataset<Vec<f32>>,
+    pub model_record: Vec<u8>
 }
 
 impl ClientTrainingConfig {
-    pub fn new(train: ClientDataset, test: ClientDataset, model_path: String) -> Self {
+    pub fn new(train: InMemDataset<Vec<f32>>, test: InMemDataset<Vec<f32>>, model_record: Vec<u8>) -> Self {
         ClientTrainingConfig { 
             num_epochs: 10, 
             batch_size: 64, 
@@ -35,7 +35,7 @@ impl ClientTrainingConfig {
             lr: 1e-4, 
             train_set: train, 
             test_set: test, 
-            model_path: model_path
+            model_record: model_record
         }
     }
 }
@@ -44,12 +44,14 @@ pub fn local_train<B: AutodiffBackend>(device: B::Device, config: ClientTraining
     B::seed(config.seed);
 
     // Create the model and optimizer.
-    let record: ModelRecord<B> = BinFileRecorder::<FullPrecisionSettings>::new()
-        .load(config.model_path.clone().into(), &device).expect(&format!("TRAINING: File {:?} not found", config.model_path));
+    let record: ModelRecord<B> = BinBytesRecorder::<FullPrecisionSettings>::new()
+        .load(config.model_record.clone(), &device).expect(&format!("TRAINING: File {:?} not found", config.model_record));
     let mut model: Model<B> = ModelConfig::new().init(&device).load_record(record);
     let mut optim = AdamConfig::new().init();
 
-    // Create the batcher.
+// ----------------------------------------------------
+
+     // Create the batcher.
     let batcher_train = ClientBatcher::<B>::new(device.clone());
     let batcher_valid = ClientBatcher::<B::InnerBackend>::new(device.clone());
 
@@ -65,7 +67,8 @@ pub fn local_train<B: AutodiffBackend>(device: B::Device, config: ClientTraining
         .batch_size(config.batch_size)
         .shuffle(config.seed)
         .num_workers(config.num_workers)
-        .build(config.test_set);
+        .build(config.test_set); 
+// ----------------------------------------------------
 
     // Iterate over training and validation loop for X epochs.
     for epoch in 1..config.num_epochs + 1 {
@@ -102,7 +105,7 @@ pub fn local_train<B: AutodiffBackend>(device: B::Device, config: ClientTraining
                 epoch,
                 iteration,
                 loss.clone().into_scalar(),
-            );
+            ); 
             
         }
     }
