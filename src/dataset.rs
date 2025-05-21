@@ -44,7 +44,7 @@ impl<B: Backend> ClientBatcher<B> {
 }
 
 impl<B: Backend> Batcher<B, Vec<f32>, ClientBatch<B>> for ClientBatcher<B> {
-    fn batch(&self, items: Vec<Vec<f32>>, device: &B::Device) -> ClientBatch<B> {
+    fn batch(&self, items: Vec<Vec<f32>>, _device: &B::Device) -> ClientBatch<B> {
       
         let data = items.clone()
             .iter()
@@ -98,15 +98,7 @@ impl ClientDataset {
         Self { dataset: dataset }
     }
 
-    pub fn dataset(&self) -> InMemDataset<ClientItem> {
-        let mut v = Vec::new();
-        for i in 0..self.dataset.len() {
-            v.push(self.dataset.get(i).unwrap());
-        }
-        InMemDataset::<ClientItem>::new(v)
-    }
 }
-
 
 // Implement the `Dataset` trait which requires `get` and `len`
 impl Dataset<ClientItem> for ClientDataset {

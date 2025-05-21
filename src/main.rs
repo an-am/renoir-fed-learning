@@ -1,17 +1,17 @@
-use std::{io::Error, sync::Arc};
+use std::sync::Arc;
 
+use csv::WriterBuilder;
 use model::{Model, ModelRecord};
-use renoir::prelude::*;
-use dataset::{get_train_test, preprocessing, ClientBatcher, ClientDataset};
+use renoir::{prelude::*};
+use dataset::{get_train_test, preprocessing, ClientDataset};
 use burn::{
             backend::Autodiff, 
-            data::{self, dataloader::{DataLoader, DataLoaderBuilder}, dataset::{transform::PartialDataset, Dataset, InMemDataset}}, 
+            data::dataset::{transform::PartialDataset, Dataset, InMemDataset}, 
             module::{ConstantRecord, Module, Param}, 
             nn::LinearRecord, 
-            record::{BinBytesRecorder, FullPrecisionSettings, Recorder}, train
+            record::{BinBytesRecorder, FullPrecisionSettings, Recorder}
         };
 
-use serde::{ser::SerializeTuple, Serialize};
 use training::{local_train, ClientTrainingConfig};
 use burn_ndarray::{NdArray, NdArrayDevice};
 
@@ -24,14 +24,10 @@ type MyAutoDiff = Autodiff<MyBackend>;
 
 const N_MODELS: i32 = 10;
 const N_ITERATIONS: i32 = 10;
-const BATCH_SIZE: usize = 64;
-const N_WORKERS: usize = 1;
-const SEED: u64 = 42;
 
 fn main() {
     let (conf, _args) = RuntimeConfig::from_args();
     conf.spawn_remote_workers();
-    let conf = Arc::new(conf);
 
     // Create a device for tensor computation
     let device = NdArrayDevice::default();
@@ -55,14 +51,10 @@ fn main() {
     }
     
     // Create the model
-    let mut model: Model<MyAutoDiff> = model::ModelConfig::new().init(&device);
+    let mut global_model: Model<MyAutoDiff> = model::ModelConfig::new().init(&device);
 
-    let mut record_vec = Vec::new();
-    for _ in 0..10 {
-        let recorder = BinBytesRecorder::<FullPrecisionSettings>::new();
-        let bytes = recorder.record(model.clone().into_record(), ()).unwrap();
-        record_vec.push(bytes);
-    }
+    let recorder = BinBytesRecorder::<FullPrecisionSettings>::new();
+    let mut global_record: Vec<u8> = recorder.record(global_model.clone().into_record(), ()).unwrap();
 
     // Train and valid sets
     let train: Arc<Vec<ClientDataset>> = Arc::new(train);
@@ -70,7 +62,6 @@ fn main() {
 
     // Data preparation
     let ctx = StreamContext::new(conf.clone());
-
 
     let s = ctx.stream_par_iter(0..N_MODELS)
         .map(move |i| {
@@ -92,35 +83,34 @@ fn main() {
                 y_vec.push(i.clone());
             }
             (x_vec, y_vec)
-        }).collect_vec_all();
-
+        })
+        .collect_vec_all();
+    
     ctx.execute_blocking();
 
+    println!("ok data prep");
     let data= s.get().unwrap();
-
+    
     for iteration in 0..N_ITERATIONS as usize {
 
         let ctx = StreamContext::new(conf.clone());
-
-        let local_record_vec: Vec<Vec<u8>> = record_vec.clone();
 
         let s = ctx
             .stream_par_iter( 0..N_MODELS)
             .rich_map({
                 let data = Arc::new(data.clone());
-                let local_record_vec = local_record_vec.clone();
+                let local_record = global_record.clone();
+                
                 move|i| {
-                    let binding = data.clone();
-                    let data = binding.get(i as usize).unwrap();
+                    let data = data.get(i as usize).unwrap();
                     let train = InMemDataset::new(data.clone().0);
                     let test = InMemDataset::new(data.clone().1);
-                    let config = ClientTrainingConfig::new(
-                        train,
-                        test,
-                        local_record_vec[i as usize].clone()
-                    );
-                    println!("Training model {:?}", i);
-                    local_train::<MyAutoDiff>(device.clone(), config).unwrap()
+                    
+                    let config = ClientTrainingConfig::new(train, test, local_record.clone());
+
+                    // println!("Training model {:?}", i);
+                    
+                    local_train::<MyAutoDiff>(device.clone(), config, i, iteration).unwrap()
                 } 
             })
             .fold(None, |acc: &mut Option<ModelRecord<Autodiff<NdArray>>>, record: Vec<u8>| {
@@ -161,7 +151,7 @@ fn main() {
                         acc.replace(record); 
                     }
             })
-            .map(|record| {
+            .map(|record: Option<ModelRecord<Autodiff<NdArray>>>| {
                 let ModelRecord { layer1, layer2, activation: _ } = record.unwrap();
                 let LinearRecord { weight: weight_l1, bias: bias_l1 } = layer1;
                 let LinearRecord { weight: weight_l2, bias: bias_l2 } = layer2;
@@ -188,30 +178,35 @@ fn main() {
                 
                 recorder.record(record, ()).unwrap()
             })
-            .collect_vec();
-            
-        ctx.execute_blocking();
+            .collect_vec_all(); 
         
-        let s = s.get();
+        let start_time = std::time::Instant::now();
+        ctx.execute_blocking();
+        let elapsed = start_time.elapsed();
+        println!("Time: {:?}", elapsed);
+       
+        /* // --------------------------------------------------------------
+        let file_name = format!("local_train_time_{}.csv", iteration);
+        let mut wtr = WriterBuilder::new()
+            .has_headers(true)
+            .from_path(&file_name)
+            .expect("Cannot create CSV file");
 
-        if !s.is_none() {
-            println!("Loading model {:?}", iteration);
-            let s = s.unwrap().pop().unwrap();
-            let recorder = BinBytesRecorder::<FullPrecisionSettings>::new();
-            let global_record = recorder.load::<ModelRecord<MyAutoDiff>>(s, &device).unwrap();
-            model = model.load_record(global_record);
-            record_vec.clear();
-            
-            let recorder = BinBytesRecorder::<FullPrecisionSettings>::new();
-            let bytes = recorder.record(model.clone().into_record(), ()).unwrap();
-            
-            for _ in 0..N_MODELS {
-                record_vec.push(bytes.clone());
-            }
-        }
+        // header
+        wtr.write_record(&["iteration", "time"])
+            .expect("Cannot write header");
 
+        // rows
+        wtr.serialize((iteration, elapsed.as_secs_f32()))
+        .expect("Cannot write record");
+        
+        wtr.flush().expect("Cannot flush writer");
+        // -------------------------------------------------------------- */
+
+        global_record = s.get().unwrap().pop().unwrap();
+        
         println!("Iteration {:?} completed!", iteration);
     }
-    println!("Training completed!");
+    //println!("Training completed!");
     return;
 }

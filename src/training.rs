@@ -1,13 +1,10 @@
 use burn::{
-            data::{dataloader::DataLoaderBuilder, dataset::InMemDataset}, 
-            module::AutodiffModule, 
-            optim::{AdamConfig, GradientsParams, Optimizer}, 
-            prelude::*, 
-            record::{BinBytesRecorder, FullPrecisionSettings, Recorder}, 
-            tensor::backend::AutodiffBackend, 
+            data::{dataloader::DataLoaderBuilder, dataset::InMemDataset}, module::AutodiffModule, nn::loss, optim::{AdamConfig, GradientsParams, Optimizer}, prelude::*, record::{BinBytesRecorder, FullPrecisionSettings, Recorder, RecorderError}, tensor::{backend::AutodiffBackend, cast::ToElement, ops::FloatElem} 
 };
 
 use nn::loss::{MseLoss, Reduction};
+use std::fs::File;
+use csv::WriterBuilder;
 
 use crate::{
                 dataset::{ClientBatcher, ClientDataset}, 
@@ -40,7 +37,7 @@ impl ClientTrainingConfig {
     }
 }
 
-pub fn local_train<B: AutodiffBackend>(device: B::Device, config: ClientTrainingConfig) -> Result<Vec<u8>, burn::record::RecorderError> {
+pub fn local_train<B: AutodiffBackend>(device: B::Device, config: ClientTrainingConfig, i: i32, iteration: usize) -> Result<Vec<u8>, RecorderError> {
     B::seed(config.seed);
 
     // Create the model and optimizer.
@@ -71,18 +68,20 @@ pub fn local_train<B: AutodiffBackend>(device: B::Device, config: ClientTraining
 // ----------------------------------------------------
 
     // Iterate over training and validation loop for X epochs.
+    let mut a: Vec<(i32, usize, usize, f32)> = Vec::new();
+
     for epoch in 1..config.num_epochs + 1 {
         // Training loop.
         for (iteration, batch) in dataloader_train.iter().enumerate() {
             let output = model.forward(batch.data);
             let loss = MseLoss::new().forward(output, batch.target.unsqueeze(), Reduction::Mean);
             
-            println!(
+           /*  println!(
                 "[Train - Epoch {} - Iteration {}] Loss {:.3}",
                 epoch,
                 iteration,
                 loss.clone().into_scalar(),
-            );
+            ); */
 
             // Gradients for the current backward pass
             let grads = loss.backward();
@@ -95,22 +94,48 @@ pub fn local_train<B: AutodiffBackend>(device: B::Device, config: ClientTraining
         // Get the model without autodiff.
         let model_valid = model.valid();
 
+        let mut sum = 0.0;
+        let mut n   = 0usize;
+
         // Validation loop.
         for (iteration, batch) in dataloader_test.iter().enumerate() {
             let output = model_valid.forward(batch.data);
-            let loss = MseLoss::new().forward(output, batch.target.unsqueeze(), Reduction::Mean);
+            let loss: Tensor<<B as AutodiffBackend>::InnerBackend, 1> = MseLoss::new().forward(output, batch.target.unsqueeze(), Reduction::Mean);
             
-            println!(
+            sum += loss.clone().into_scalar().to_f32();
+            n += 1;
+
+            /* println!(
                 "[Valid - Epoch {} - Iteration {}] Loss {}",
                 epoch,
                 iteration,
-                loss.clone().into_scalar(),
-            ); 
-            
+                loss.clone().into_scalar()
+            );  */
         }
-    }
 
+        let epoch_mse = sum / n as f32;
+        a.push((i, iteration, epoch, epoch_mse));
+    }
+    
+   /*  // ---------------- Save per‑epoch losses to CSV ----------------
+    let file_name = format!("local_loss_{}_{}.csv", i, iteration);
+    let mut wtr = WriterBuilder::new()
+        .has_headers(true)
+        .from_path(&file_name)
+        .expect("Cannot create CSV file");
+
+    // header
+    wtr.write_record(&["i", "iteration", "epoch", "mse"])
+        .expect("Cannot write header");
+
+    // rows
+    for (ci, it, ep, mse) in &a {
+        wtr.serialize((ci, it, ep, mse))
+           .expect("Cannot write record");
+    }
+    wtr.flush().expect("Cannot flush writer");
+    // --------------------------------------------------------------
+ */
     let recorder = BinBytesRecorder::<FullPrecisionSettings>::new();
     recorder.record(model.into_record(), ())
 }
-
