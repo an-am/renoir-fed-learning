@@ -40,8 +40,8 @@ fn main() {
     let train_dataset = get_train_test(dataset.clone(), "train");
     let test_dataset = get_train_test(dataset, "test");
 
-    let train_partition = PartialDataset::split(train_dataset, 10);
-    let test_partition = PartialDataset::split(test_dataset, 10);
+    let train_partition = PartialDataset::split(train_dataset, N_MODELS);
+    let test_partition = PartialDataset::split(test_dataset, N_MODELS);
 
     let mut train: Vec<ClientDataset> = Vec::new();
     let mut test: Vec<ClientDataset> = Vec::new();
