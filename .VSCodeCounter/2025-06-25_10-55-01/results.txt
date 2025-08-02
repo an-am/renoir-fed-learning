@@ -1,0 +1,47 @@
+Date : 2025-06-25 10:55:01
+Directory : /Users/antonelloamore/VScode/renoir-fed-training
+Total : 17 files,  25277 codes, 84 comments, 781 blanks, all 26142 lines
+
+Languages
++----------+------------+------------+------------+------------+------------+
+| language | files      | code       | comment    | blank      | total      |
++----------+------------+------------+------------+------------+------------+
+| CSV      |          4 |     19,013 |          0 |          1 |     19,014 |
+| TOML     |          3 |      5,577 |          2 |        603 |      6,182 |
+| Rust     |          5 |        427 |         77 |        120 |        624 |
+| PlantUML |          5 |        260 |          5 |         57 |        322 |
++----------+------------+------------+------------+------------+------------+
+
+Directories
++-------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+| path                                                                    | files      | code       | comment    | blank      | total      |
++-------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+| .                                                                       |         17 |     25,277 |         84 |        781 |     26,142 |
+| . (Files)                                                               |          7 |     24,590 |          2 |        604 |     25,196 |
+| diagrams                                                                |          5 |        260 |          5 |         57 |        322 |
+| src                                                                     |          5 |        427 |         77 |        120 |        624 |
++-------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+
+Files
++-------------------------------------------------------------------------+----------+------------+------------+------------+------------+
+| filename                                                                | language | code       | comment    | blank      | total      |
++-------------------------------------------------------------------------+----------+------------+------------+------------+------------+
+| /Users/antonelloamore/VScode/renoir-fed-training/Cargo.lock             | TOML     |      5,516 |          2 |        590 |      6,108 |
+| /Users/antonelloamore/VScode/renoir-fed-training/Cargo.toml             | TOML     |         11 |          0 |          3 |         14 |
+| /Users/antonelloamore/VScode/renoir-fed-training/Needs.csv              | CSV      |      5,001 |          0 |          0 |      5,001 |
+| /Users/antonelloamore/VScode/renoir-fed-training/config.toml            | TOML     |         50 |          0 |         10 |         60 |
+| /Users/antonelloamore/VScode/renoir-fed-training/diagrams/activity.wsd  | PlantUML |         35 |          0 |          9 |         44 |
+| /Users/antonelloamore/VScode/renoir-fed-training/diagrams/class.wsd     | PlantUML |        111 |          4 |         20 |        135 |
+| /Users/antonelloamore/VScode/renoir-fed-training/diagrams/component.wsd | PlantUML |         56 |          1 |         12 |         69 |
+| /Users/antonelloamore/VScode/renoir-fed-training/diagrams/sequence.wsd  | PlantUML |         44 |          0 |         11 |         55 |
+| /Users/antonelloamore/VScode/renoir-fed-training/diagrams/use-case.wsd  | PlantUML |         14 |          0 |          5 |         19 |
+| /Users/antonelloamore/VScode/renoir-fed-training/exec_time.csv          | CSV      |         11 |          0 |          0 |         11 |
+| /Users/antonelloamore/VScode/renoir-fed-training/loss_test.csv          | CSV      |      7,001 |          0 |          0 |      7,001 |
+| /Users/antonelloamore/VScode/renoir-fed-training/src/dataset.rs         | Rust     |        122 |          6 |         30 |        158 |
+| /Users/antonelloamore/VScode/renoir-fed-training/src/lib.rs             | Rust     |          3 |          0 |          1 |          4 |
+| /Users/antonelloamore/VScode/renoir-fed-training/src/main.rs            | Rust     |        152 |         26 |         48 |        226 |
+| /Users/antonelloamore/VScode/renoir-fed-training/src/model.rs           | Rust     |         72 |          0 |         17 |         89 |
+| /Users/antonelloamore/VScode/renoir-fed-training/src/training.rs        | Rust     |         78 |         45 |         24 |        147 |
+| /Users/antonelloamore/VScode/renoir-fed-training/training_log.csv       | CSV      |      7,000 |          0 |          1 |      7,001 |
+| Total                                                                   |          |     25,277 |         84 |        781 |     26,142 |
++-------------------------------------------------------------------------+----------+------------+------------+------------+------------+

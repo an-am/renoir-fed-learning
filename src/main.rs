@@ -1,6 +1,7 @@
+use core::time;
 use std::sync::Arc;
 
-use csv::WriterBuilder;
+use bincode::{config, serde};
 use model::{Model, ModelRecord};
 use renoir::{prelude::*};
 use dataset::{get_train_test, preprocessing, ClientDataset};
@@ -9,11 +10,13 @@ use burn::{
             data::dataset::{transform::PartialDataset, Dataset, InMemDataset}, 
             module::{ConstantRecord, Module, Param}, 
             nn::LinearRecord, 
-            record::{BinBytesRecorder, FullPrecisionSettings, Recorder}
+            record::{BinBytesRecorder, FullPrecisionSettings, Recorder}, tensor::cast::ToElement
         };
 
 use training::{local_train, ClientTrainingConfig};
 use burn_ndarray::{NdArray, NdArrayDevice};
+
+use crate::{dataset::ClientItem, model::ModelConfig};
 
 mod model;
 mod dataset;
@@ -32,9 +35,14 @@ fn main() {
     // Create a device for tensor computation
     let device = NdArrayDevice::default();
 
+    // Create the model
+    let mut global_model: Model<MyAutoDiff> = model::ModelConfig::new().init(&device);
+    
+    let recorder = BinBytesRecorder::<FullPrecisionSettings>::new();
+    let mut global_record: Vec<u8> = recorder.record(global_model.clone().into_record(), ()).unwrap();
+    
     // Get train and test data
     let file_path: &str= "/Users/antonelloamore/VScode/renoir-fed-training/Needs.csv";
-
     let dataset = ClientDataset::new(file_path).unwrap();
 
     let train_dataset = get_train_test(dataset.clone(), "train");
@@ -45,24 +53,19 @@ fn main() {
 
     let mut train: Vec<ClientDataset> = Vec::new();
     let mut test: Vec<ClientDataset> = Vec::new();
-    for i in 0..10 as usize { 
+
+    for i in 0..N_MODELS as usize { 
         train.push(ClientDataset::from_InMemD(InMemDataset::from_dataset(&train_partition[i])));
         test.push(ClientDataset::from_InMemD(InMemDataset::from_dataset(&test_partition[i])));
     }
     
-    // Create the model
-    let mut global_model: Model<MyAutoDiff> = model::ModelConfig::new().init(&device);
-
-    let recorder = BinBytesRecorder::<FullPrecisionSettings>::new();
-    let mut global_record: Vec<u8> = recorder.record(global_model.clone().into_record(), ()).unwrap();
-
     // Train and valid sets
     let train: Arc<Vec<ClientDataset>> = Arc::new(train);
     let test: Arc<Vec<ClientDataset>> = Arc::new(test);
 
-    // Data preparation
     let ctx = StreamContext::new(conf.clone());
-
+        
+    // Hosts preprocess their data
     let s = ctx.stream_par_iter(0..N_MODELS)
         .map(move |i| {
             let binding = train.clone();
@@ -88,25 +91,34 @@ fn main() {
     
     ctx.execute_blocking();
 
-    println!("ok data prep");
-    let data= s.get().unwrap();
+    let data = s.get().unwrap();
+    let conf_main = conf.clone();
+
+    let mut times: Vec<f32> = Vec::new();
     
     for iteration in 0..N_ITERATIONS as usize {
 
-        let ctx = StreamContext::new(conf.clone());
+        let ctx = StreamContext::new(conf_main.clone());
 
         let s = ctx
-            .stream_par_iter( 0..N_MODELS)
+            .stream_par_iter(0..N_MODELS)
             .rich_map({
-                let data = Arc::new(data.clone());
-                let local_record = global_record.clone();
-                
-                move|i| {
+                let data = data.clone();
+                let mut local_record: ModelRecord<MyAutoDiff> = BinBytesRecorder::<FullPrecisionSettings>::new()
+                        .load(global_record.clone(), &device).unwrap();
+                let mut local_model: Model<MyAutoDiff> = ModelConfig::new().init(&device).load_record(local_record.clone());
+
+                move |i| {
                     let data = data.get(i as usize).unwrap();
+
                     let train = InMemDataset::new(data.clone().0);
                     let test = InMemDataset::new(data.clone().1);
-                    
-                    let config = ClientTrainingConfig::new(train, test, local_record.clone());
+
+                    local_record = BinBytesRecorder::<FullPrecisionSettings>::new()
+                        .load(global_record.clone(), &device).unwrap();
+                    local_model = local_model.clone().load_record(local_record.clone());
+
+                    let config = ClientTrainingConfig::new(train, test, local_model.clone());
 
                     // println!("Training model {:?}", i);
                     
@@ -180,11 +192,12 @@ fn main() {
             })
             .collect_vec_all(); 
         
-        let start_time = std::time::Instant::now();
+        let start_time: std::time::Instant = std::time::Instant::now();
         ctx.execute_blocking();
-        let elapsed = start_time.elapsed();
-        println!("Time: {:?}", elapsed);
-       
+        global_record = s.get().unwrap().pop().unwrap();
+        let elapsed: f32 = start_time.elapsed().as_secs_f32();
+        times.push(elapsed);
+     
         /* // --------------------------------------------------------------
         let file_name = format!("local_train_time_{}.csv", iteration);
         let mut wtr = WriterBuilder::new()
@@ -202,11 +215,12 @@ fn main() {
         
         wtr.flush().expect("Cannot flush writer");
         // -------------------------------------------------------------- */
-
-        global_record = s.get().unwrap().pop().unwrap();
         
         println!("Iteration {:?} completed!", iteration);
     }
     //println!("Training completed!");
+    let elapsed: f32= times.iter().sum();
+    println!("Time: {:?}", elapsed);
+
     return;
 }
